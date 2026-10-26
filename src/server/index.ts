@@ -17,9 +17,10 @@ try {
   process.exit(1);
 }
 
-const client = config.OPENAI_API_KEY
+const apiKey = config.OPENAI_API_KEY?.trim();
+const client = apiKey
   ? createOpenAIClient({
-      apiKey: config.OPENAI_API_KEY,
+      apiKey,
       baseURL: config.OPENAI_BASE_URL,
       model: config.OPENAI_MODEL,
       authScheme: process.env.OPENAI_AUTH_SCHEME,
