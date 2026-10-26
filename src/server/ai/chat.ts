@@ -1,6 +1,6 @@
 import { ZodError } from 'zod';
 import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
-import { pragmaValue, stageDb, tx, type Db } from '../db/connection.js';
+import { stageDb, tx, type Db } from '../db/connection.js';
 import { ConflictError, NotFoundError, ProviderError, ValidationError, zodToMessage } from '../services/errors.js';
 import { getSettings } from '../services/settings.js';
 import { systemPrompt } from './prompts.js';
@@ -59,7 +59,8 @@ export async function chat(db: Db, client: AIClient, input: string): Promise<Cha
     ...listMessages(db).slice(-20).map(({ role, content }) => ({ role, content })),
     { role: 'user', content: input },
   ];
-  const version = pragmaValue(db, 'data_version');
+  // Turso rejects PRAGMA data_version; total_changes() is portable and catches
+  // concurrent writes on this single server connection.
   const writes = db.prepare('SELECT total_changes() AS n').get() as { n: number };
   const staged = stageDb(db);
   const stagedMessageId = Number(staged.db.prepare(
@@ -80,7 +81,7 @@ export async function chat(db: Db, client: AIClient, input: string): Promise<Cha
         const text = reply.content.trim();
         return tx(db, () => {
           const currentWrites = db.prepare('SELECT total_changes() AS n').get() as { n: number };
-          if (pragmaValue(db, 'data_version') !== version || currentWrites.n !== writes.n) {
+          if (currentWrites.n !== writes.n) {
             throw new ConflictError('The schedule changed while the assistant was replying. Please try again.', []);
           }
           const messageId = Number(db.prepare(
