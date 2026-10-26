@@ -15,9 +15,9 @@ services:
       - key: DATABASE_PATH
         value: /tmp/xweek.db
       - key: OPENAI_BASE_URL
-        value: https://models.github.ai/inference
+        value: https://api.groq.com/openai/v1
       - key: OPENAI_MODEL
-        value: openai/gpt-4o-mini
+        value: llama-3.3-70b-versatile
       - key: OPENAI_AUTH_SCHEME
         value: bearer
       - key: OPENAI_API_KEY
