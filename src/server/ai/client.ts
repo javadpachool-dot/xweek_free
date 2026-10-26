@@ -29,17 +29,22 @@ function normalizeBaseUrl(baseURL: string): string {
   return baseURL.trim().replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
 }
 
+function normalizeApiKey(apiKey: string): string {
+  return apiKey.trim().replace(/^Bearer\s+/i, '');
+}
+
 function createGitHubClient(config: { apiKey: string; baseURL: string; model: string }): AIClient {
   const endpoint = `${normalizeBaseUrl(config.baseURL)}/chat/completions`;
+  const apiKey = normalizeApiKey(config.apiKey);
   return {
     async complete(messages, tools) {
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
           Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${config.apiKey}`,
+          Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
-          'X-GitHub-Api-Version': '2022-11-28',
+          'X-GitHub-Api-Version': '2026-03-10',
         },
         body: JSON.stringify({
           model: config.model,
@@ -50,6 +55,11 @@ function createGitHubClient(config: { apiKey: string; baseURL: string; model: st
         signal: AbortSignal.timeout(30000),
       });
       const text = await response.text();
+      if (text.trim() === 'OK') {
+        throw new Error(
+          'GitHub Models rejected the token (200 OK). Check that OPENAI_API_KEY is a valid GitHub PAT with models:read.',
+        );
+      }
       if (!response.ok) {
         throw new Error(`GitHub Models ${response.status}: ${text.slice(0, 800)}`);
       }
@@ -85,13 +95,14 @@ export function createOpenAIClient(config: {
   }
 
   const scheme = config.authScheme?.trim();
+  const apiKey = normalizeApiKey(config.apiKey);
   const sdk = new OpenAI({
-    apiKey: config.apiKey,
+    apiKey,
     baseURL,
     timeout: 30000,
     maxRetries: 0,
     ...(scheme && scheme.toLowerCase() !== 'bearer'
-      ? { defaultHeaders: { Authorization: `${scheme} ${config.apiKey}` } }
+      ? { defaultHeaders: { Authorization: `${scheme} ${apiKey}` } }
       : {}),
   });
   return {
