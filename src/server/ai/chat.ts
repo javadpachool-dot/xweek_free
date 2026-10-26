@@ -73,11 +73,15 @@ export async function chat(db: Db, client: AIClient, input: string): Promise<Cha
       let reply;
       try {
         reply = await client.complete(messages, toolDefinitions);
-      } catch {
+      } catch (error) {
+        console.error('AI provider request failed:', error);
         throw new ProviderError();
       }
       if (!reply.tool_calls?.length) {
-        if (!reply.content?.trim()) throw new ProviderError();
+        if (!reply.content?.trim()) {
+          console.error('AI returned an empty reply:', reply);
+          throw new ProviderError();
+        }
         const text = reply.content.trim();
         return tx(db, () => {
           const currentWrites = db.prepare('SELECT total_changes() AS n').get() as { n: number };
@@ -107,6 +111,7 @@ export async function chat(db: Db, client: AIClient, input: string): Promise<Cha
         messages.push({ role: 'tool', tool_call_id: call.id, content });
       }
     }
+    console.error('AI did not finish within 6 tool turns');
     throw new ProviderError();
   } finally {
     staged.close();
