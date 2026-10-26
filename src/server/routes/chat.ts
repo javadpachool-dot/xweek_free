@@ -6,17 +6,47 @@ import { chatInputSchema } from '../../shared/schemas.js';
 import { parseBody } from '../middleware.js';
 import { ProviderError } from '../services/errors.js';
 
+async function githubTokenInfo(): Promise<Record<string, unknown>> {
+  if (!(process.env.OPENAI_BASE_URL ?? '').includes('models.github.ai')) {
+    return { skipped: 'not GitHub Models' };
+  }
+  const token = process.env.OPENAI_API_KEY?.trim().replace(/^Bearer\s+/i, '');
+  if (!token) return { status: 0, error: 'OPENAI_API_KEY is empty' };
+  try {
+    const response = await fetch('https://api.github.com/user', {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    const body = (await response.json().catch(() => ({}))) as { login?: string; message?: string };
+    return {
+      status: response.status,
+      login: body.login,
+      message: body.message,
+      scopes: response.headers.get('x-oauth-scopes'),
+      permissions: response.headers.get('x-accepted-github-permissions'),
+    };
+  } catch (error) {
+    return { status: 0, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export function chatRouter(db: Db, client?: AIClient): Router {
   const router = Router();
   router.get('/chat/messages', (_req, res) => {
     res.json(listMessages(db));
   });
   router.get('/chat/diagnose', async (_req, res) => {
+    const github = await githubTokenInfo();
     if (!client) {
       res.status(503).json({
         configured: false,
         model: process.env.OPENAI_MODEL,
         baseURL: process.env.OPENAI_BASE_URL,
+        github,
         error: 'OPENAI_API_KEY is missing',
       });
       return;
@@ -28,6 +58,7 @@ export function chatRouter(db: Db, client?: AIClient): Router {
         ok: true,
         model: process.env.OPENAI_MODEL,
         baseURL: process.env.OPENAI_BASE_URL,
+        github,
         reply: reply.content,
       });
     } catch (error) {
@@ -38,6 +69,7 @@ export function chatRouter(db: Db, client?: AIClient): Router {
         ok: false,
         model: process.env.OPENAI_MODEL,
         baseURL: process.env.OPENAI_BASE_URL,
+        github,
         status: detail.status,
         error: detail.message ?? String(error),
       });
