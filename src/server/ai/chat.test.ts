@@ -7,6 +7,7 @@ import { openDb, openMemoryDb } from '../db/connection.js';
 import { addDays, todayInTz } from '../../shared/time.js';
 import { createTask, listTasks } from '../services/tasks.js';
 import { chat, listMessages } from './chat.js';
+import { ConflictError } from '../services/errors.js';
 import type { AIClient, ModelReply } from './client.js';
 
 function call(name: string, args: object): ModelReply {
@@ -42,6 +43,31 @@ describe('chat loop with a scripted model', () => {
       db.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('rejects a reply if the schedule changed while the model was thinking', async () => {
+    const db = openMemoryDb();
+    const racing: AIClient = {
+      async complete() {
+        createTask(db, { title: 'Racing', task_date: tomorrow, start_time: '08:00', end_time: '09:00' });
+        return { content: 'Done.' };
+      },
+    };
+    await expect(chat(db, racing, 'Add something')).rejects.toThrow(ConflictError);
+    expect(listMessages(db)).toEqual([]);
+  });
+
+  it('does not treat a settings write as a schedule conflict', async () => {
+    const db = openMemoryDb();
+    const other: AIClient = {
+      async complete() {
+        db.prepare("UPDATE settings SET timezone = 'Asia/Tehran' WHERE id = 1").run();
+        return { content: 'You have 8 hours free.' };
+      },
+    };
+    const result = await chat(db, other, 'How much free time do I have?');
+    expect(result.reply).toBe('You have 8 hours free.');
+    expect(listMessages(db)).toHaveLength(2);
   });
 
   it('creates a daily gym recurrence', async () => {

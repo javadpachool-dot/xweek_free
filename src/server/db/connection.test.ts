@@ -7,14 +7,14 @@ import { openDb, openMemoryDb, pragmaValue, stageDb } from './connection.js';
 import { addDays, fromMinutes, toMinutes, weekRange, todayInTz, nowInTz } from '../../shared/time.js';
 
 describe('db connection', () => {
-  it('builds the schema from schema.sql and sets user_version = 2', () => {
+  it('builds the schema from schema.sql and sets user_version = 3', () => {
     const db = openMemoryDb();
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all()
       .map((r) => (r as { name: string }).name);
-    expect(tables).toEqual(['chat_messages', 'settings', 'task_changes', 'task_groups', 'tasks']);
-    expect(pragmaValue(db, 'user_version')).toBe(2);
+    expect(tables).toEqual(['chat_messages', 'schedule_revision', 'settings', 'task_changes', 'task_groups', 'tasks']);
+    expect(pragmaValue(db, 'user_version')).toBe(3);
   });
 
   it('is idempotent: initSchema does not re-run or wipe data', () => {
@@ -23,7 +23,7 @@ describe('db connection', () => {
     const before = db.prepare('SELECT COUNT(*) AS n FROM settings').get();
     expect(before).toMatchObject({ n: 1 });
     const version = pragmaValue<number>(db, 'user_version');
-    expect(version).toBe(2);
+    expect(version).toBe(3);
   });
 
   it('has foreign_keys enabled and WAL on a real file db', () => {
@@ -114,6 +114,18 @@ describe('db connection', () => {
     db.close();
   });
 
+  it('tracks schedule writes in schedule_revision, not settings/chat writes', () => {
+    const db = openMemoryDb();
+    const revision = () => (db.prepare('SELECT value FROM schedule_revision WHERE id = 1').get() as { value: number }).value;
+    const before = revision();
+    db.prepare("INSERT INTO chat_messages (role, content) VALUES ('user', 'hello')").run();
+    db.prepare("UPDATE settings SET timezone = 'Asia/Tehran' WHERE id = 1").run();
+    expect(revision()).toBe(before);
+    db.prepare("INSERT INTO tasks (title, task_date, start_time, end_time) VALUES ('A', '2026-10-28', '10:00', '11:00')").run();
+    expect(revision()).toBeGreaterThan(before);
+    db.close();
+  });
+
   it('repairs an imported database whose user_version was reset to 0', () => {
     const dir = mkdtempSync(join(tmpdir(), 'xweek-import-'));
     const path = join(dir, 'test.db');
@@ -122,7 +134,7 @@ describe('db connection', () => {
     seeded.close();
 
     const db = openDb(path);
-    expect(pragmaValue(db, 'user_version')).toBe(2);
+    expect(pragmaValue(db, 'user_version')).toBe(3);
     const columns = db.pragma('table_info(task_groups)') as Array<{ name: string }>;
     expect(columns.map((column) => column.name)).toContain('starts_on');
     db.close();
@@ -134,6 +146,7 @@ describe('db connection', () => {
     const path = join(dir, 'test.db');
     const oldDb = new Database(path);
     oldDb.exec('CREATE TABLE task_groups (id INTEGER PRIMARY KEY, title TEXT NOT NULL)');
+    oldDb.exec('CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT, task_date TEXT, start_time TEXT, end_time TEXT)');
     oldDb.pragma('user_version = 1');
     oldDb.close();
 
@@ -142,7 +155,7 @@ describe('db connection', () => {
     expect(columns.map((column) => column.name)).toEqual([
       'id', 'title', 'starts_on', 'start_time', 'end_time',
     ]);
-    expect(pragmaValue(db, 'user_version')).toBe(2);
+    expect(pragmaValue(db, 'user_version')).toBe(3);
     db.close();
     rmSync(dir, { recursive: true, force: true });
   });

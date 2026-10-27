@@ -31,6 +31,13 @@ export function listMessages(db: Db): ChatMessage[] {
     .all() as ChatMessage[];
 }
 
+function scheduleRevision(db: Db): number {
+  const row = db.prepare('SELECT value FROM schedule_revision WHERE id = 1').get() as
+    | { value: number }
+    | undefined;
+  return row?.value ?? 0;
+}
+
 function toolError(error: unknown): string {
   if (error instanceof ZodError) return zodToMessage(error);
   if (error instanceof ValidationError || error instanceof ConflictError || error instanceof NotFoundError) {
@@ -66,9 +73,9 @@ export async function chat(db: Db, client: AIClient, input: string): Promise<Cha
     })),
     { role: 'user', content: input },
   ];
-  // Turso rejects PRAGMA data_version; total_changes() is portable and catches
-  // concurrent writes on this single server connection.
-  const writes = db.prepare('SELECT total_changes() AS n').get() as { n: number };
+  // A trigger-maintained counter is stable across Turso reconnects, unlike
+  // total_changes(), and only moves when the schedule itself changes.
+  const revision = scheduleRevision(db);
   const staged = stageDb(db);
   const stagedMessageId = Number(staged.db.prepare(
     "INSERT INTO chat_messages (role, content) VALUES ('user', ?)",
@@ -97,8 +104,7 @@ export async function chat(db: Db, client: AIClient, input: string): Promise<Cha
         const text = reply.content.trim();
         warmDb(db);
         return tx(db, () => {
-          const currentWrites = db.prepare('SELECT total_changes() AS n').get() as { n: number };
-          if (currentWrites.n !== writes.n) {
+          if (scheduleRevision(db) !== revision) {
             throw new ConflictError('The schedule changed while the assistant was replying. Please try again.', []);
           }
           const messageId = Number(db.prepare(
